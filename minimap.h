@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
-#include "bseq.cuh"
+#include "bseq.h"
 
 #define MM_IDX_DEF_B    14
 #define MM_DEREP_Q50    5.0
@@ -72,7 +72,7 @@ void mm_sketch(const char *str, int len, int w, int k, uint32_t rid, mm128_v *p)
 // minimizer indexing
 mm_idx_t *mm_idx_init(int w, int k, int b);
 void mm_idx_destroy(mm_idx_t *mi);
-void *mm_idx_gen(bseq_file_t *fp, int w, int k, int b, int tbatch_size, uint64_t ibatch_size, int keep_name);
+mm_idx_t *mm_idx_gen(bseq_file_t *fp, int w, int k, int b, int tbatch_size, int n_threads, uint64_t ibatch_size, int keep_name);
 void mm_idx_set_max_occ(mm_idx_t *mi, float f);
 const uint64_t *mm_idx_get(const mm_idx_t *mi, uint64_t minier, int *n);
 

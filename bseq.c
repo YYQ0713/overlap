@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "bseq.cuh"
-#include "kseq.cuh"
+#include "bseq.h"
+#include "kseq.h"
 KSEQ_INIT(gzFile, gzread)
 
 extern unsigned char seq_nt4_table[256];
@@ -41,6 +41,7 @@ bseq1_t *bseq_read(bseq_file_t *fp, int chunk_size, int *n_)
 	kseq_t *ks = fp->ks;
 	m = n = 0; seqs = 0;
 	while (kseq_read(ks) >= 0) {
+		printf("test\n");
 		bseq1_t *s;
 		assert(ks->seq.l <= INT32_MAX);
 		if (n >= m) {
