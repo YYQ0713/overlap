@@ -39,7 +39,7 @@ unsigned char seq_nt4_table[256] = {
 	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
 };
 #else
-extern unsigned char seq_nt4_table[256];
+extern __device__ unsigned char seq_nt4_table[256];
 #endif
 
 struct sdust_buf_s {

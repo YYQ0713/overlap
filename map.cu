@@ -222,7 +222,7 @@ static void get_reg(mm_tbuf_t *b, int radius, int k, int min_cnt, int max_gap, f
 	// post repeat removal
 	if (!(flag&MM_F_WITH_REP)) drop_rep(b, min_cnt);
 }
-
+/*
 const mm_reg1_t *mm_map(const mm_idx_t *mi, int l_seq, const char *seq, int *n_regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *name)
 {
 	int j, n_dreg = 0, u = 0;
@@ -275,6 +275,7 @@ const mm_reg1_t *mm_map(const mm_idx_t *mi, int l_seq, const char *seq, int *n_r
 	*n_regs = b->reg.n;
 	return b->reg.a;
 }
+*/
 
 /**************************
  * Multi-threaded mapping *
@@ -299,6 +300,7 @@ typedef struct {
 	mm_tbuf_t **buf;
 } step_t;
 
+/*
 static void worker_for(void *_data, long i, int tid) // kt_for() callback
 {
     step_t *step = (step_t*)_data;
@@ -372,3 +374,59 @@ int mm_map_file(const mm_idx_t *idx, const char *fn, const mm_mapopt_t *opt, int
 	bseq_close(pl.fp);
 	return 0;
 }
+*/
+
+/*************
+ * CUDA CODE *
+ *************/
+
+typedef struct {
+	int batch_size, n_processed;
+	const mm_mapopt_t *opt;
+	bseq_file_t *fp;
+	const mm_idx_t *mi;
+} streams_t;
+
+
+/*
+__host__ stepcu_t* stream_read_seq(streams_t *st) {
+	int i;
+    streams_t *p = st;
+    stepcu_t *s;
+    s = (stepcu_t*)calloc(1, sizeof(stepcu_t));
+    s->seq = bseq_read(p->fp, p->batch_size, &s->n_seq);
+    if (s->seq) {
+        //s->p = p;
+        for (i = 0; i < s->n_seq; ++i)
+            s->seq[i].rid = p->n_processed++;
+        //s->buf = (mm_tbuf_t**)calloc(p->n_threads, sizeof(mm_tbuf_t*));
+        //for (i = 0; i < p->n_threads; ++i)
+        //    s->buf[i] = mm_tbuf_init();
+        //s->n_reg = (int*)calloc(s->n_seq, sizeof(int));
+        //->reg = (mm_reg1_t**)calloc(s->n_seq, sizeof(mm_reg1_t*));
+        return s;
+    } else free(s);
+}
+
+__global__ void print_seq(stepcu_t *s) {
+	printf("%s\n", s->seq[1].seq);
+}
+
+__host__ void cuda_map_file(const mm_idx_t *idx, const char *fn, const mm_mapopt_t *opt, int ibatch_size)
+{
+	streams_t pl;
+	memset(&pl, 0, sizeof(streams_t));
+	pl.fp = bseq_open(fn);
+	if (pl.fp == 0) exit(1);
+	pl.opt = opt, pl.mi = idx;
+	pl.batch_size = ibatch_size;
+	
+    stepcu_t *s = stream_read_seq(&pl);
+	fprintf(stderr, "%d\n", s->n_seq);
+	stepcu_t *gpu_s = copy_step_t_to_gpu(s);
+	print_seq<<<1, 1>>>(gpu_s);
+	cudaDeviceReset();
+	cudaFree(gpu_s);
+	bseq_close(pl.fp);
+}
+*/

@@ -12,6 +12,109 @@ typedef khash_t(idx) idxhash_t;
 
 void kt_for(int n_threads, void (*func)(void*,long,int), void *data, long n);
 
+//sketch
+__device__ unsigned char seq_nt4_table[256] = {
+	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  3, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  3, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4, 
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
+};
+
+__device__ __forceinline__ void hash64(uint64_t key, uint64_t mask, uint64_t *hash_value)
+{
+	key = (~key + (key << 21)) & mask; // key = (key << 21) - key - 1;
+	key = key ^ key >> 24;
+	key = ((key + (key << 3)) + (key << 8)) & mask; // key * 265
+	key = key ^ key >> 14;
+	key = ((key + (key << 2)) + (key << 4)) & mask; // key * 21
+	key = key ^ key >> 28;
+	key = (key + (key << 31)) & mask;
+	*hash_value = key;
+}
+
+/**
+ * Find symmetric (w,k)-minimizers on a DNA sequence
+ *
+ * @param str    DNA sequence
+ * @param len    length of $str
+ * @param w      find a minimizer for every $w consecutive k-mers
+ * @param k      k-mer size
+ * @param rid    reference ID; will be copied to the output $p array
+ * @param p      minimizers; p->a[i].x is the 2k-bit hash value;
+ *               p->a[i].y = rid<<32 | lastPos<<1 | strand
+ *               where lastPos is the position of the last base of the i-th minimizer,
+ *               and strand indicates whether the minimizer comes from the top or the bottom strand.
+ *               Callers may want to set "p->n = 0"; otherwise results are appended to p
+ */
+__device__ void mm_sketch(const char *str, int len, int w, int k, uint32_t rid, mm128_v *p)
+{
+	uint64_t shift1 = 2 * (k - 1), mask = (1ULL<<2*k) - 1, kmer[2] = {0,0};
+	int i, j, l, buf_pos, min_pos;
+	mm128_t *buf, min = { UINT64_MAX, UINT64_MAX };
+
+	assert(len > 0 && w > 0 && k > 0);
+	//buf = (mm128_t*)alloca(w * 16);
+	cudaMalloc(&buf, w * 16);
+	memset(buf, 0xff, w * 16);
+	//cudaMemset(buf, 0xff, w * 16);
+
+	for (i = l = buf_pos = min_pos = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)str[i]];
+		mm128_t info = { UINT64_MAX, UINT64_MAX };
+		if (c < 4) { // not an ambiguous base
+			int z;
+			kmer[0] = (kmer[0] << 2 | c) & mask;           // forward k-mer
+			kmer[1] = (kmer[1] >> 2) | (3ULL^c) << shift1; // reverse k-mer
+			if (kmer[0] == kmer[1]) continue; // skip "symmetric k-mers" as we don't know it strand
+			z = kmer[0] < kmer[1]? 0 : 1; // strand
+			if (++l >= k)
+				hash64(kmer[z], mask, &info.x), info.y = (uint64_t)rid<<32 | (uint32_t)i<<1 | z;
+		} else l = 0;
+		buf[buf_pos] = info; // need to do this here as appropriate buf_pos and buf[buf_pos] are needed below
+		/*
+		if (l == w + k - 1) { // special case for the first window - because identical k-mers are not stored yet
+			for (j = buf_pos + 1; j < w; ++j)
+				if (min.x == buf[j].x && buf[j].y != min.y) kv_push(mm128_t, *p, buf[j]);
+			for (j = 0; j < buf_pos; ++j)
+				if (min.x == buf[j].x && buf[j].y != min.y) kv_push(mm128_t, *p, buf[j]);
+		}
+		if (info.x <= min.x) { // a new minimum; then write the old min
+			if (l >= w + k) kv_push(mm128_t, *p, min);
+			min = info, min_pos = buf_pos;
+		} else if (buf_pos == min_pos) { // old min has moved outside the window
+			if (l >= w + k - 1) kv_push(mm128_t, *p, min);
+			for (j = buf_pos + 1, min.x = UINT64_MAX; j < w; ++j) // the two loops are necessary when there are identical k-mers
+				if (min.x >= buf[j].x) min = buf[j], min_pos = j; // >= is important s.t. min is always the closest k-mer
+			for (j = 0; j <= buf_pos; ++j)
+				if (min.x >= buf[j].x) min = buf[j], min_pos = j;
+			if (l >= w + k - 1) { // write identical k-mers
+				for (j = buf_pos + 1; j < w; ++j) // these two loops make sure the output is sorted
+					if (min.x == buf[j].x && min.y != buf[j].y) kv_push(mm128_t, *p, buf[j]);
+				for (j = 0; j <= buf_pos; ++j)
+					if (min.x == buf[j].x && min.y != buf[j].y) kv_push(mm128_t, *p, buf[j]);
+			}
+		}
+		*/
+		if (++buf_pos == w) buf_pos = 0;
+	}
+	//if (min.x != UINT64_MAX)
+		//kv_push(mm128_t, *p, min);
+}
+
+
+
 mm_idx_t *mm_idx_init(int w, int k, int b)
 {
 	mm_idx_t *mi;
@@ -172,6 +275,13 @@ typedef struct {
 	mm128_v a;
 } step_t;
 
+typedef struct {
+	int n_processed, keep_name;
+	bseq_file_t *fp;
+	uint64_t ibatch_size, n_read;
+	mm_idx_t *mi;
+} cu_shared_t;
+
 static void mm_idx_add(mm_idx_t *mi, int n, const mm128_t *a)
 {
 	int i, mask = (1<<mi->b) - 1;
@@ -181,6 +291,7 @@ static void mm_idx_add(mm_idx_t *mi, int n, const mm128_t *a)
 	}
 }
 
+/*
 static void *worker_pipeline(void *shared, int step, void *in)
 {
 	int i;
@@ -227,7 +338,9 @@ static void *worker_pipeline(void *shared, int step, void *in)
 	}
     return 0;
 }
+*/
 
+/*
 mm_idx_t *mm_idx_gen(bseq_file_t *fp, int w, int k, int b, int tbatch_size, int n_threads, uint64_t ibatch_size, int keep_name)
 {
 	pipeline_t pl;
@@ -261,6 +374,7 @@ mm_idx_t *mm_idx_build(const char *fn, int w, int k, int n_threads) // a simpler
 	bseq_close(fp);
 	return mi;
 }
+*/
 
 /*************
  * index I/O *
@@ -349,4 +463,117 @@ mm_idx_t *mm_idx_load(FILE *fp)
 		}
 	}
 	return mi;
+}
+
+/**************
+ * CUDA INDEX *
+ **************/
+__device__ size_t gpu_strlen(const char* str) {
+    size_t len = 0;
+    while (str[len] != '\0') {
+        len++;
+    }
+    return len;
+}
+
+__device__ char* gpu_strdup(const char* src) {
+    
+    size_t len = 0;
+    while (src[len] != '\0') {
+        len++;
+    }
+    len++;
+
+    char* dst;
+    cudaMalloc(&dst, len * sizeof(char));
+
+    for (size_t i = 0; i < len; i++) {
+        dst[i] = src[i];
+    }
+
+    return dst;
+}
+
+__global__ void seq_init(stepcu_t *s, mm_idx_t *mi) {
+	uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+	uint32_t n_threads = blockDim.x * gridDim.x;
+	int count;
+	for(uint32_t i = idx; i < s->n_seq; i += n_threads) {
+		//count = gpu_strlen(s->seq[i].name);
+		mi->name[i] = &s->seq.name[s->seq.bseq_info[i].name_s];
+		mi->len[i] = s->seq.bseq_info[i].l_seq;
+		s->seq.bseq_info[i].rid = i;
+	}
+}
+
+__global__ void compute_sketch(stepcu_t *d_s, mm_idx_t *d_m, mm128_v *vec) {
+	uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+	uint32_t n_threads = blockDim.x * gridDim.x;
+	stepcu_t *s = d_s;
+	
+	for (int i = idx; i < s->n_seq; i += n_threads) {
+		bseq_info_t *t = &d_s->seq.bseq_info[i];
+		mm_sketch(&d_s->seq.seq[t->name_s], t->l_seq, d_m->w, d_m->k, t->rid, &vec[i]);
+	}
+}
+
+void cu_index_gen(bseq_file_t *fp, int w, int k, int b, uint64_t ibatch_size, int keep_name) {
+	cu_shared_t h_cush;
+	cu_shared_t *d_cush;
+	mm_idx_t *d_mi;
+	memset(&h_cush, 0, sizeof(cu_shared_t));
+	h_cush.keep_name = keep_name;
+	h_cush.ibatch_size = ibatch_size;
+	h_cush.fp = fp;
+	if (h_cush.fp == 0) exit(0);
+	mm_idx_t *h_mi = mm_idx_init(w, k, b);
+
+	int i;
+	stepcu_t *h_s;
+	if (h_cush.n_read > h_cush.ibatch_size) exit(0);
+	h_s = (stepcu_t*)calloc(1, sizeof(stepcu_t));
+	h_s->seq = bseqs_read(h_cush.fp, h_cush.ibatch_size, &h_s->n_seq);
+	//printf("test\n");
+	if (h_s->seq.seq) {
+		uint32_t m = h_s->n_seq;
+		kroundup32(m);
+		stepcu_t *d_s = copy_step_t_to_gpu(h_s);
+		print_stepcu<<<1, 1>>>(d_s);
+		CUDA_CHECK(cudaMalloc((void**)&d_cush, sizeof(cu_shared_t)));
+		CUDA_CHECK(cudaMemcpy(d_cush, &h_cush, sizeof(cu_shared_t), cudaMemcpyHostToDevice));
+		if(h_cush.keep_name) {
+			CUDA_CHECK(cudaMalloc((void**)&d_mi, sizeof(mm_idx_t)));
+			CUDA_CHECK(cudaMemcpy(d_mi, h_mi, sizeof(mm_idx_t), cudaMemcpyHostToDevice));
+			char **d_name;
+    		CUDA_CHECK(cudaMalloc((void**)&d_name, m * sizeof(char*)));
+			CUDA_CHECK(cudaMemcpy(&(d_mi->name), &d_name, sizeof(char**), cudaMemcpyHostToDevice));
+		}
+		int32_t *d_len;
+    	CUDA_CHECK(cudaMalloc((void**)&d_len, m * sizeof(int32_t)));
+		CUDA_CHECK(cudaMemcpy(&(d_mi->len), &d_len, sizeof(int32_t*), cudaMemcpyHostToDevice));
+
+		mm_idx_bucket_t *d_B;
+    	CUDA_CHECK(cudaMalloc((void**)&d_B, (1 << b) * sizeof(mm_idx_bucket_t)));
+		CUDA_CHECK(cudaMemcpy(&(d_mi->B), &d_B, sizeof(mm_idx_bucket_t*), cudaMemcpyHostToDevice));
+
+		mm128_v *gpu_vecinfo;
+		CUDA_CHECK(cudaMalloc(&gpu_vecinfo, h_s->n_seq * sizeof(mm128_v)));
+
+		dim3 block(32);
+		seq_init<<<(h_s->n_seq + block.x - 1) / block.x, block>>>(d_s, d_mi);
+		cudaDeviceSynchronize();
+		compute_sketch<<<(h_s->n_seq + block.x - 1) / block.x, block>>>(d_s, d_mi, gpu_vecinfo);
+	}
+
+
+
+
+
+
+	//dont forget
+	//CUDA_CHECK(cudaFree(d_cush));
+	//CUDA_CHECK(cudaFree(d_len));
+	//CUDA_CHECK(cudaFree(d_mi));
+	//CUDA_CHECK(cudaFree(d_s));
+	//CUDA_CHECK(cudaFree(d_name));
 }

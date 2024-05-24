@@ -6,6 +6,15 @@
 #include <sys/types.h>
 #include "bseq.h"
 
+// CUDA错误检查宏
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = call; \
+    if(err != cudaSuccess) { \
+		fprintf(stderr, "CUDA error: %s at line %d\n", cudaGetErrorString(err), __LINE__); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
+
 #define MM_IDX_DEF_B    14
 #define MM_DEREP_Q50    5.0
 
@@ -47,6 +56,16 @@ typedef struct {
 } mm_reg1_t;
 
 typedef struct {
+	//const streams_t *p;
+    int n_seq;
+	//bseq1_t *seq;
+	bseqs_t seq;
+	//int *n_reg;
+	//mm_reg1_t **reg;
+	//mm_tbuf_t **buf;
+} stepcu_t;
+
+typedef struct {
 	int radius;  // bandwidth to cluster hits
 	int max_gap; // break a chain if there are no minimizers in a max_gap window
 	int min_cnt; // minimum number of minimizers to start a chain
@@ -67,7 +86,7 @@ extern "C" {
 #endif
 
 // compute minimizers
-void mm_sketch(const char *str, int len, int w, int k, uint32_t rid, mm128_v *p);
+__device__ void mm_sketch(const char *str, int len, int w, int k, uint32_t rid, mm128_v *p);
 
 // minimizer indexing
 mm_idx_t *mm_idx_init(int w, int k, int b);
@@ -75,6 +94,7 @@ void mm_idx_destroy(mm_idx_t *mi);
 mm_idx_t *mm_idx_gen(bseq_file_t *fp, int w, int k, int b, int tbatch_size, int n_threads, uint64_t ibatch_size, int keep_name);
 void mm_idx_set_max_occ(mm_idx_t *mi, float f);
 const uint64_t *mm_idx_get(const mm_idx_t *mi, uint64_t minier, int *n);
+void cu_index_gen(bseq_file_t *fp, int w, int k, int b, uint64_t ibatch_size, int keep_name);
 
 mm_idx_t *mm_idx_build(const char *fn, int w, int k, int n_threads);
 
@@ -89,6 +109,17 @@ void mm_tbuf_destroy(mm_tbuf_t *b);
 const mm_reg1_t *mm_map(const mm_idx_t *mi, int l_seq, const char *seq, int *n_regs, mm_tbuf_t *b, const mm_mapopt_t *opt, const char *name);
 
 int mm_map_file(const mm_idx_t *idx, const char *fn, const mm_mapopt_t *opt, int n_threads, int tbatch_size);
+
+//cuda
+__host__ void cuda_map_file(const mm_idx_t *idx, const char *fn, const mm_mapopt_t *opt, int ibatch_size);
+__host__ stepcu_t* copy_step_t_to_gpu(const stepcu_t *cpu_step);
+
+
+//std c func
+__global__ void print_stepcu(stepcu_t *s);
+__global__ void print_idxcu(mm_idx_t *mi);
+__device__ size_t gpu_strlen(const char* str);
+__device__ char* gpu_strdup(const char* src);
 
 // private functions (may be moved to a "mmpriv.h" in future)
 double cputime(void);

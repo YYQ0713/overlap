@@ -115,23 +115,24 @@ int main(int argc, char *argv[])
 	if (is_idx) fpr = fopen(argv[optind], "rb");
 	else fp = bseq_open(argv[optind]);
 	if (fnw) fpw = fopen(fnw, "wb");
-	for (;;) {
+	//for (;;) {
 		mm_idx_t *mi = 0;
 		if (fpr) mi = mm_idx_load(fpr);
 		else if (!bseq_eof(fp))
-			mi = mm_idx_gen(fp, w, k, b, tbatch_size, n_threads, ibatch_size, keep_name);
-		if (mi == 0) break;
-		if (mm_verbose >= 3)
-			fprintf(stderr, "[M::%s::%.3f*%.2f] loaded/built the index for %d target sequence(s)\n",
-					__func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), mi->n);
-		mm_idx_set_max_occ(mi, f);
-		if (mm_verbose >= 3)
-			fprintf(stderr, "[M::%s] max occurrences of a minimizer to consider: %d\n", __func__, mi->max_occ);
-		if (fpw) mm_idx_dump(fpw, mi);
-		for (i = optind + 1; i < argc; ++i)
-			mm_map_file(mi, argv[i], &opt, n_threads, tbatch_size);
+			cu_index_gen(fp, w, k, b, ibatch_size, keep_name);
+			//mi = mm_idx_gen(fp, w, k, b, tbatch_size, n_threads, ibatch_size, keep_name);
+		//if (mi == 0) break;
+		//if (mm_verbose >= 3)
+		//	fprintf(stderr, "[M::%s::%.3f*%.2f] loaded/built the index for %d target sequence(s)\n",
+		//			__func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), mi->n);
+		//mm_idx_set_max_occ(mi, f);
+		//if (mm_verbose >= 3)
+		//	fprintf(stderr, "[M::%s] max occurrences of a minimizer to consider: %d\n", __func__, mi->max_occ);
+		//if (fpw) mm_idx_dump(fpw, mi);
+		//for (i = optind + 1; i < argc; ++i)
+		//	mm_map_file(mi, argv[i], &opt, n_threads, tbatch_size);
 		mm_idx_destroy(mi);
-	}
+	//}
 	if (fpw) fclose(fpw);
 	if (fpr) fclose(fpr);
 	if (fp)  bseq_close(fp);
@@ -140,6 +141,8 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "[M::%s] CMD:", __func__);
 	for (i = 0; i < argc; ++i)
 		fprintf(stderr, " %s", argv[i]);
+	
+	cudaDeviceSynchronize();
 	fprintf(stderr, "\n[M::%s] Real time: %.3f sec; CPU: %.3f sec\n", __func__, realtime() - mm_realtime0, cputime());
 	return 0;
 }

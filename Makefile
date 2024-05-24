@@ -1,13 +1,13 @@
-CC=			gcc
-CFLAGS=		-pg -Wall -O2 -Wc++-compat -Wno-unused-function
-OBJS=		kthread.o misc.o bseq.o sketch.o sdust.o index.o map.o
+CC=			nvcc
+CFLAGS=		-O2 -Xcompiler -Wunused-result
+OBJS=		kthread.o misc.o bseq.o sdust.o index.o launch_data.o map.o#sketch.o
 PROG=		minimap
 PROG_EXTRA=	sdust minimap-lite
 LIBS=		-lm -lz -lpthread
 
-.SUFFIXES:.c .o
+.SUFFIXES:.cu .o
 
-.c.o:
+.cu.o:
 		$(CC) -c $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
 
 all:$(PROG)
@@ -23,7 +23,7 @@ minimap-lite:example.o libminimap.a
 libminimap.a:$(OBJS)
 		$(AR) -csru $@ $(OBJS)
 
-sdust:sdust.c kdq.h kvec.h kseq.h sdust.h
+sdust:sdust.cu kdq.h kvec.h kseq.h sdust.h
 		$(CC) -D_SDUST_MAIN $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@ $(LDFLAGS) -lz
 
 clean:
@@ -38,7 +38,8 @@ bseq.o: bseq.h kseq.h
 example.o: minimap.h bseq.h kseq.h
 index.o: minimap.h bseq.h kvec.h khash.h
 main.o: minimap.h bseq.h
+#cuda_map.o: bseq.h kvec.h minimap.h sdust.h ksort.h
 map.o: bseq.h kvec.h minimap.h sdust.h ksort.h
 misc.o: minimap.h bseq.h ksort.h
 sdust.o: kdq.h kvec.h sdust.h
-sketch.o: kvec.h minimap.h bseq.h
+#sketch.o: kvec.h minimap.h bseq.h
